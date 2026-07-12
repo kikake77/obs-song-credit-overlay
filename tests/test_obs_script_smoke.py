@@ -19,6 +19,24 @@ class FakeSource(object):
         self.settings = {"text": ""}
 
 
+class FakeVec2(object):
+    def __init__(self):
+        self.x = 0.0
+        self.y = 0.0
+
+
+class FakeSceneItem(object):
+    def __init__(self, source):
+        self.source = source
+        self.position = (0.0, 0.0)
+        self.scale = (3.0, 3.0)
+        self.rotation = 15.0
+        self.alignment = 0
+        self.bounds_type = 99
+        self.bounds_alignment = 0
+        self.bounds = (0.0, 0.0)
+
+
 def build_fake_obs():
     module = types.ModuleType("obspython")
     module.OBS_INVALID_HOTKEY_ID = -1
@@ -29,9 +47,16 @@ def build_fake_obs():
     module.OBS_TEXT_INFO = 2
     module.OBS_COMBO_TYPE_LIST = 0
     module.OBS_COMBO_FORMAT_STRING = 0
+    module.OBS_BOUNDS_NONE = 0
+    module.OBS_ALIGN_LEFT = 1
+    module.OBS_ALIGN_TOP = 4
     module.sources = {
         name: FakeSource(name) for name in ("Song Title", "Song Artist", "Song Credits")
     }
+    module.scene_items = {
+        name: FakeSceneItem(source) for name, source in module.sources.items()
+    }
+    module.current_scene_source = FakeSource("Current Scene")
 
     module.script_log = lambda level, message: None
     module.obs_data_set_default_string = lambda data, key, value: data.setdefault(key, value)
@@ -39,6 +64,7 @@ def build_fake_obs():
     module.obs_data_get_string = lambda data, key: data.get(key, "")
     module.obs_data_get_bool = lambda data, key: bool(data.get(key, False))
     module.obs_data_set_string = lambda data, key, value: data.__setitem__(key, value)
+    module.obs_data_set_bool = lambda data, key, value: data.__setitem__(key, bool(value))
     module.obs_properties_create = lambda: {"properties": []}
 
     def add_property(props, key, label, kind):
@@ -76,6 +102,30 @@ def build_fake_obs():
     module.obs_data_release = lambda data: None
     module.obs_source_update = lambda source, data: source.settings.update(data)
     module.obs_source_release = lambda source: None
+    module.obs_frontend_get_current_scene = lambda: module.current_scene_source
+    module.obs_scene_from_source = lambda source: module.scene_items
+    module.obs_scene_find_source = lambda scene, name: scene.get(name)
+    module.obs_scene_find_source_recursive = lambda scene, name: scene.get(name)
+    module.vec2 = FakeVec2
+    module.obs_sceneitem_set_bounds_type = (
+        lambda item, value: setattr(item, "bounds_type", value)
+    )
+    module.obs_sceneitem_set_scale = (
+        lambda item, value: setattr(item, "scale", (value.x, value.y))
+    )
+    module.obs_sceneitem_set_rot = lambda item, value: setattr(item, "rotation", value)
+    module.obs_sceneitem_set_alignment = (
+        lambda item, value: setattr(item, "alignment", value)
+    )
+    module.obs_sceneitem_set_bounds_alignment = (
+        lambda item, value: setattr(item, "bounds_alignment", value)
+    )
+    module.obs_sceneitem_set_bounds = (
+        lambda item, value: setattr(item, "bounds", (value.x, value.y))
+    )
+    module.obs_sceneitem_set_pos = (
+        lambda item, value: setattr(item, "position", (value.x, value.y))
+    )
     return module
 
 
@@ -98,6 +148,7 @@ class ObsScriptSmokeTests(unittest.TestCase):
         self.assertIn(self.script.KEY_QUERY_TITLE, keys)
         self.assertIn(self.script.KEY_TITLE_SOURCE, keys)
         self.assertIn("show_button", keys)
+        self.assertIn("apply_lower_third_layout_button", keys)
 
     def test_candidate_combo_can_be_refreshed_in_place(self):
         settings = {}
@@ -168,6 +219,41 @@ class ObsScriptSmokeTests(unittest.TestCase):
         self.assertTrue(self.script._hide_overlay())
         for source in self.fake_obs.sources.values():
             self.assertEqual("", source.settings["text"])
+
+    def test_first_show_applies_1920x1080_lower_third_layout_only_once(self):
+        settings = {
+            self.script.KEY_TITLE: "配置テスト曲",
+            self.script.KEY_TITLE_SOURCE: "Song Title",
+            self.script.KEY_ARTIST_SOURCE: "Song Artist",
+            self.script.KEY_CREDIT_SOURCE: "Song Credits",
+            self.script.KEY_FORMAT: "jp",
+            self.script.KEY_SAVE_HISTORY: False,
+            self.script.KEY_AUTO_LAYOUT: True,
+            self.script.KEY_LAYOUT_APPLIED: False,
+        }
+        self.script.script_update(settings)
+        self.assertTrue(self.script._show_overlay(False))
+
+        expected = {
+            "Song Title": ((160.0, 650.0), (1600.0, 90.0)),
+            "Song Artist": ((160.0, 760.0), (1600.0, 60.0)),
+            "Song Credits": ((160.0, 850.0), (1600.0, 100.0)),
+        }
+        for name, layout in expected.items():
+            item = self.fake_obs.scene_items[name]
+            self.assertEqual(layout[0], item.position)
+            self.assertEqual(layout[1], item.bounds)
+            self.assertEqual((1.0, 1.0), item.scale)
+            self.assertEqual(0.0, item.rotation)
+            self.assertEqual(self.script.SCENE_ITEM_BOUNDS_SCALE_INNER, item.bounds_type)
+            self.assertEqual(self.script.SCENE_ITEM_ALIGN_TOP_LEFT, item.bounds_alignment)
+        self.assertTrue(settings[self.script.KEY_LAYOUT_APPLIED])
+
+        self.fake_obs.scene_items["Song Title"].position = (999.0, 999.0)
+        self.assertTrue(self.script._show_overlay(False))
+        self.assertEqual(
+            (999.0, 999.0), self.fake_obs.scene_items["Song Title"].position
+        )
 
 
 if __name__ == "__main__":

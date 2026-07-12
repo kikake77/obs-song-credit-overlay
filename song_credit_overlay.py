@@ -30,6 +30,8 @@ KEY_ARTIST_SOURCE = "artist_source"
 KEY_CREDIT_SOURCE = "credit_source"
 KEY_FORMAT = "credit_format"
 KEY_SAVE_HISTORY = "save_history"
+KEY_AUTO_LAYOUT = "auto_lower_third_layout"
+KEY_LAYOUT_APPLIED = "lower_third_layout_applied"
 KEY_HISTORY = "history_key"
 KEY_STATUS = "status_message"
 KEY_SHOW_HOTKEY = "show_hotkey"
@@ -60,8 +62,19 @@ _state = {
     KEY_CREDIT_SOURCE: "",
     KEY_FORMAT: "jp",
     KEY_SAVE_HISTORY: True,
+    KEY_AUTO_LAYOUT: True,
+    KEY_LAYOUT_APPLIED: False,
     KEY_HISTORY: "",
 }
+
+
+LOWER_THIRD_LAYOUT = {
+    "title": {"position": (160.0, 650.0), "bounds": (1600.0, 90.0)},
+    "artist": {"position": (160.0, 760.0), "bounds": (1600.0, 60.0)},
+    "credits": {"position": (160.0, 850.0), "bounds": (1600.0, 100.0)},
+}
+SCENE_ITEM_ALIGN_TOP_LEFT = 5  # OBS_ALIGN_LEFT (1) | OBS_ALIGN_TOP (4)
+SCENE_ITEM_BOUNDS_SCALE_INNER = 2
 
 
 def _log(level, message):
@@ -79,6 +92,13 @@ def _set_string(key, value):
     _state[key] = value
     if _settings is not None:
         obs.obs_data_set_string(_settings, key, value)
+
+
+def _set_bool(key, value):
+    value = bool(value)
+    _state[key] = value
+    if _settings is not None:
+        obs.obs_data_set_bool(_settings, key, value)
 
 
 def _set_record_fields(record):
@@ -284,6 +304,68 @@ def _selected_output_sources():
     ]
 
 
+def _apply_lower_third_layout():
+    """Place selected text sources in a safe lower-third area for 1920x1080 scenes."""
+    selected = [(name, key) for name, key in _selected_output_sources() if name]
+    if not selected:
+        return False, "出力先のテキストソースを選択してください。"
+
+    scene_source = obs.obs_frontend_get_current_scene()
+    if scene_source is None:
+        return False, "現在のシーンを取得できません。"
+    try:
+        scene = obs.obs_scene_from_source(scene_source)
+        if scene is None:
+            return False, "現在のシーンを取得できません。"
+
+        finder = getattr(obs, "obs_scene_find_source_recursive", None)
+        if finder is None:
+            finder = obs.obs_scene_find_source
+
+        errors = []
+        scene_items = []
+        for source_name, output_key in selected:
+            item = finder(scene, source_name)
+            if item is None:
+                errors.append("「{}」が現在のシーンにありません。".format(source_name))
+                continue
+            scene_items.append((item, output_key))
+
+        if errors:
+            return False, " ".join(errors)
+
+        for item, output_key in scene_items:
+            scale = obs.vec2()
+            scale.x = 1.0
+            scale.y = 1.0
+            position = obs.vec2()
+            position.x, position.y = LOWER_THIRD_LAYOUT[output_key]["position"]
+            bounds = obs.vec2()
+            bounds.x, bounds.y = LOWER_THIRD_LAYOUT[output_key]["bounds"]
+
+            obs.obs_sceneitem_set_scale(item, scale)
+            obs.obs_sceneitem_set_rot(item, 0.0)
+            obs.obs_sceneitem_set_alignment(item, SCENE_ITEM_ALIGN_TOP_LEFT)
+            obs.obs_sceneitem_set_bounds_type(item, SCENE_ITEM_BOUNDS_SCALE_INNER)
+            obs.obs_sceneitem_set_bounds_alignment(item, SCENE_ITEM_ALIGN_TOP_LEFT)
+            obs.obs_sceneitem_set_bounds(item, bounds)
+            obs.obs_sceneitem_set_pos(item, position)
+
+    finally:
+        obs.obs_source_release(scene_source)
+    return True, ""
+
+
+def _on_apply_layout_clicked(props, prop):
+    applied, error = _apply_lower_third_layout()
+    if not applied:
+        _set_status("下部配置エラー: " + error)
+        return True
+    _set_bool(KEY_LAYOUT_APPLIED, True)
+    _set_status("出力先を1920×1080の下部へ配置しました。")
+    return True
+
+
 def _show_overlay(save_to_history=True):
     global _history
     record = _current_record()
@@ -310,13 +392,22 @@ def _show_overlay(save_to_history=True):
         _set_status(" ".join(errors))
         return False
 
+    layout_message = ""
+    if _state[KEY_AUTO_LAYOUT] and not _state[KEY_LAYOUT_APPLIED]:
+        applied, layout_error = _apply_lower_third_layout()
+        if applied:
+            _set_bool(KEY_LAYOUT_APPLIED, True)
+            layout_message = " 1920×1080の下部へ配置しました。"
+        else:
+            layout_message = " 下部配置はできませんでした: {}".format(layout_error)
+
     if save_to_history and _state[KEY_SAVE_HISTORY]:
         try:
             _history = core.upsert_history(record)
         except core.SongCreditError as exc:
             _set_status("表示しましたが、履歴保存に失敗しました: {}".format(exc))
             return True
-    _set_status("「{}」をOBSへ表示しました。".format(record["title"]))
+    _set_status("「{}」をOBSへ表示しました。{}".format(record["title"], layout_message))
     return True
 
 
@@ -362,7 +453,7 @@ def _on_hide_hotkey(pressed):
 
 def script_description():
     return (
-        "<b>Song Credit Overlay 0.1.1</b><br>"
+        "<b>Song Credit Overlay 0.1.2</b><br>"
         "MusicBrainzで楽曲を検索し、曲名・アーティスト・作詞／作曲／編曲を "
         "OBSの専用テキストソースへ表示します。検索結果は必ず確認し、必要に応じて修正してください。"
     )
@@ -373,6 +464,8 @@ def script_defaults(settings):
     obs.obs_data_set_default_string(settings, KEY_QUERY_ARTIST, "")
     obs.obs_data_set_default_string(settings, KEY_FORMAT, "jp")
     obs.obs_data_set_default_bool(settings, KEY_SAVE_HISTORY, True)
+    obs.obs_data_set_default_bool(settings, KEY_AUTO_LAYOUT, True)
+    obs.obs_data_set_default_bool(settings, KEY_LAYOUT_APPLIED, False)
     obs.obs_data_set_default_string(
         settings, KEY_STATUS, "曲名を入力して検索するか、表示内容を手動入力してください。"
     )
@@ -402,6 +495,8 @@ def script_update(settings):
     for key in string_keys:
         _state[key] = obs.obs_data_get_string(settings, key) or ""
     _state[KEY_SAVE_HISTORY] = obs.obs_data_get_bool(settings, KEY_SAVE_HISTORY)
+    _state[KEY_AUTO_LAYOUT] = obs.obs_data_get_bool(settings, KEY_AUTO_LAYOUT)
+    _state[KEY_LAYOUT_APPLIED] = obs.obs_data_get_bool(settings, KEY_LAYOUT_APPLIED)
 
 
 def script_properties():
@@ -433,6 +528,15 @@ def script_properties():
     _add_string_list(props, KEY_TITLE_SOURCE, "曲名の出力先", sources, "使用しない")
     _add_string_list(props, KEY_ARTIST_SOURCE, "アーティストの出力先", sources, "使用しない")
     _add_string_list(props, KEY_CREDIT_SOURCE, "クレジットの出力先", sources, "使用しない")
+    obs.obs_properties_add_bool(
+        props, KEY_AUTO_LAYOUT, "初回表示時に1920×1080の下部へ自動配置"
+    )
+    obs.obs_properties_add_button(
+        props,
+        "apply_lower_third_layout_button",
+        "出力先を1920×1080の下部へ配置し直す",
+        _on_apply_layout_clicked,
+    )
 
     formats = [("日本語", "jp"), ("English", "en"), ("コンパクト", "compact")]
     _add_string_list(props, KEY_FORMAT, "クレジット表記", formats)

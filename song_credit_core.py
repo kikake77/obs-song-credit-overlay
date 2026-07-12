@@ -17,7 +17,7 @@ import urllib.request
 
 
 APP_NAME = "SongCreditOverlay"
-APP_VERSION = "0.1.1"
+APP_VERSION = "0.1.2"
 MUSICBRAINZ_BASE_URL = "https://musicbrainz.org/ws/2"
 DEFAULT_TIMEOUT_SECONDS = 12
 MIN_REQUEST_INTERVAL_SECONDS = 1.1
