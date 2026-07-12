@@ -35,6 +35,7 @@ class FakeSceneItem(object):
         self.bounds_type = 99
         self.bounds_alignment = 0
         self.bounds = (0.0, 0.0)
+        self.visible = False
 
 
 def build_fake_obs():
@@ -126,6 +127,9 @@ def build_fake_obs():
     module.obs_sceneitem_set_pos = (
         lambda item, value: setattr(item, "position", (value.x, value.y))
     )
+    module.obs_sceneitem_set_visible = (
+        lambda item, value: setattr(item, "visible", bool(value))
+    )
     return module
 
 
@@ -204,6 +208,8 @@ class ObsScriptSmokeTests(unittest.TestCase):
             "作詞：作詞者　作曲：作曲者　編曲：編曲者",
             self.fake_obs.sources["Song Credits"].settings["text"],
         )
+        for item in self.fake_obs.scene_items.values():
+            self.assertTrue(item.visible)
 
     def test_hide_clears_dedicated_sources(self):
         settings = {

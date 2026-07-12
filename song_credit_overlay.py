@@ -304,6 +304,30 @@ def _selected_output_sources():
     ]
 
 
+def _show_selected_scene_items():
+    """Ensure selected outputs are visible in the current scene."""
+    selected_names = [name for name, unused in _selected_output_sources() if name]
+    if not selected_names:
+        return
+
+    scene_source = obs.obs_frontend_get_current_scene()
+    if scene_source is None:
+        return
+    try:
+        scene = obs.obs_scene_from_source(scene_source)
+        if scene is None:
+            return
+        finder = getattr(obs, "obs_scene_find_source_recursive", None)
+        if finder is None:
+            finder = obs.obs_scene_find_source
+        for source_name in selected_names:
+            item = finder(scene, source_name)
+            if item is not None:
+                obs.obs_sceneitem_set_visible(item, True)
+    finally:
+        obs.obs_source_release(scene_source)
+
+
 def _apply_lower_third_layout():
     """Place selected text sources in a safe lower-third area for 1920x1080 scenes."""
     selected = [(name, key) for name, key in _selected_output_sources() if name]
@@ -392,6 +416,8 @@ def _show_overlay(save_to_history=True):
         _set_status(" ".join(errors))
         return False
 
+    _show_selected_scene_items()
+
     layout_message = ""
     if _state[KEY_AUTO_LAYOUT] and not _state[KEY_LAYOUT_APPLIED]:
         applied, layout_error = _apply_lower_third_layout()
@@ -453,7 +479,7 @@ def _on_hide_hotkey(pressed):
 
 def script_description():
     return (
-        "<b>Song Credit Overlay 0.1.2</b><br>"
+        "<b>Song Credit Overlay 0.1.3</b><br>"
         "MusicBrainzで楽曲を検索し、曲名・アーティスト・作詞／作曲／編曲を "
         "OBSの専用テキストソースへ表示します。検索結果は必ず確認し、必要に応じて修正してください。"
     )
