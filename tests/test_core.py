@@ -140,5 +140,34 @@ class HistoryTests(unittest.TestCase):
             self.assertEqual(1, payload["version"])
 
 
+class SetlistTests(unittest.TestCase):
+    def test_setlists_are_saved_loaded_and_listed_as_utf8_json(self):
+        with tempfile.TemporaryDirectory() as directory:
+            items = [
+                {
+                    "title": "祝福",
+                    "artist": "YOASOBI",
+                    "lyricists": ["Ayase"],
+                    "composers": ["Ayase"],
+                }
+            ]
+            path = core.save_setlist("歌枠その1", items, directory)
+            self.assertTrue(os.path.exists(path))
+            loaded = core.load_setlist("歌枠その1", directory)
+            self.assertEqual("歌枠その1", loaded["name"])
+            self.assertEqual("祝福", loaded["items"][0]["title"])
+            self.assertEqual(["歌枠その1"], core.list_setlists(directory))
+            with open(path, "r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+            self.assertEqual("歌枠その1", payload["name"])
+
+    def test_setlist_filename_is_safe_and_empty_name_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = core.save_setlist("日曜/夜:歌枠", [], directory)
+            self.assertEqual("日曜_夜_歌枠.json", os.path.basename(path))
+            with self.assertRaises(core.SongCreditError):
+                core.save_setlist("   ", [], directory)
+
+
 if __name__ == "__main__":
     unittest.main()

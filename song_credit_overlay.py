@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """OBS Studio script: search song credits and display them in text sources."""
 
+import importlib
 import os
 import sys
 
@@ -12,6 +13,8 @@ if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
 import song_credit_core as core
+
+core = importlib.reload(core)
 
 
 KEY_QUERY_TITLE = "query_title"
@@ -33,6 +36,11 @@ KEY_SAVE_HISTORY = "save_history"
 KEY_AUTO_LAYOUT = "auto_lower_third_layout"
 KEY_LAYOUT_APPLIED = "lower_third_layout_applied"
 KEY_HISTORY = "history_key"
+KEY_SETLIST_LIBRARY = "setlist_library"
+KEY_SETLIST_NAME = "setlist_name"
+KEY_SETLIST_SONG = "setlist_song_index"
+KEY_SETLIST_SUMMARY = "setlist_summary"
+KEY_NOW_PLAYING = "now_playing"
 KEY_STATUS = "status_message"
 KEY_SHOW_HOTKEY = "show_hotkey"
 KEY_HIDE_HOTKEY = "hide_hotkey"
@@ -42,6 +50,10 @@ _settings = None
 _client = core.MusicBrainzClient()
 _search_results = []
 _history = []
+_setlist_names = []
+_active_setlist = {"name": "", "items": []}
+_active_setlist_index = -1
+_ui_props = {}
 _show_hotkey_id = obs.OBS_INVALID_HOTKEY_ID
 _hide_hotkey_id = obs.OBS_INVALID_HOTKEY_ID
 
@@ -65,6 +77,11 @@ _state = {
     KEY_AUTO_LAYOUT: True,
     KEY_LAYOUT_APPLIED: False,
     KEY_HISTORY: "",
+    KEY_SETLIST_LIBRARY: "",
+    KEY_SETLIST_NAME: "",
+    KEY_SETLIST_SONG: "",
+    KEY_SETLIST_SUMMARY: "セットリスト未選択",
+    KEY_NOW_PLAYING: "まだ表示していません",
 }
 
 
@@ -149,6 +166,36 @@ def _refresh_history():
         _set_status(str(exc))
 
 
+def _refresh_setlist_names():
+    global _setlist_names
+    try:
+        _setlist_names = core.list_setlists()
+    except core.SongCreditError as exc:
+        _setlist_names = []
+        _set_status(str(exc))
+
+
+def _setlist_index():
+    try:
+        index = int(_state[KEY_SETLIST_SONG])
+    except (TypeError, ValueError):
+        return -1
+    return index if 0 <= index < len(_active_setlist["items"]) else -1
+
+
+def _update_setlist_summary():
+    count = len(_active_setlist["items"])
+    index = _setlist_index()
+    if not _active_setlist["name"]:
+        message = "セットリスト未選択"
+    elif count == 0:
+        message = "{}：0曲（曲を検索して追加してください）".format(_active_setlist["name"])
+    else:
+        position = index + 1 if index >= 0 else 0
+        message = "{}：{}曲／選択 {}曲目".format(_active_setlist["name"], count, position)
+    _set_string(KEY_SETLIST_SUMMARY, message)
+
+
 def _text_sources():
     names = []
     sources = obs.obs_enum_sources()
@@ -208,6 +255,8 @@ def _refresh_candidate_property(props):
 
 def _refresh_history_property(props):
     """Refresh the existing history combo after saving a displayed song."""
+    if props is None:
+        return
     history_prop = obs.obs_properties_get(props, KEY_HISTORY)
     if history_prop is None:
         return
@@ -219,6 +268,29 @@ def _refresh_history_property(props):
         obs.obs_property_list_add_string(
             history_prop, core.record_label(item), core.history_key(item)
         )
+
+
+def _refresh_setlist_properties():
+    live_props = _ui_props.get("live")
+    if live_props is None:
+        return
+    library_prop = obs.obs_properties_get(live_props, KEY_SETLIST_LIBRARY)
+    if library_prop is not None:
+        obs.obs_property_list_clear(library_prop)
+        if not _setlist_names:
+            obs.obs_property_list_add_string(library_prop, "保存済みセットリストなし", "")
+        for name in _setlist_names:
+            obs.obs_property_list_add_string(library_prop, name, name)
+
+    song_prop = obs.obs_properties_get(live_props, KEY_SETLIST_SONG)
+    if song_prop is not None:
+        obs.obs_property_list_clear(song_prop)
+        if not _active_setlist["items"]:
+            obs.obs_property_list_add_string(song_prop, "曲なし", "")
+        for index, item in enumerate(_active_setlist["items"]):
+            label = "{:02d}. {}".format(index + 1, core.record_label(item))
+            obs.obs_property_list_add_string(song_prop, label, str(index))
+    _update_setlist_summary()
 
 
 def _on_search_clicked(props, prop):
@@ -277,6 +349,220 @@ def _on_load_history_clicked(props, prop):
         return True
     _set_record_fields(item)
     _set_status("履歴から「{}」を読み込みました。".format(item.get("title") or ""))
+    return True
+
+
+def _on_display_history_clicked(props, prop):
+    item = _find_history_item(_state[KEY_HISTORY])
+    if item is None:
+        _set_status("最近使った曲を選択してください。")
+        return True
+    _set_record_fields(item)
+    _on_emergency_show_clicked(props, prop)
+    return True
+
+
+def _save_active_setlist():
+    global _active_setlist
+    name = (_state[KEY_SETLIST_NAME] or _active_setlist["name"]).strip()
+    if not name:
+        raise core.SongCreditError("セットリスト名を入力してください。")
+    core.save_setlist(name, _active_setlist["items"])
+    _active_setlist["name"] = name
+    _set_string(KEY_SETLIST_NAME, name)
+    _set_string(KEY_SETLIST_LIBRARY, name)
+    _refresh_setlist_names()
+    _refresh_setlist_properties()
+
+
+def _on_create_setlist_clicked(props, prop):
+    global _active_setlist
+    name = _state[KEY_SETLIST_NAME].strip()
+    if not name:
+        _set_status("新しいセットリスト名を入力してください。")
+        return True
+    _refresh_setlist_names()
+    if name in _setlist_names:
+        _set_status("同名のセットリストがあります。保存済み一覧から開いてください。")
+        return True
+    _active_setlist = {"name": name, "items": []}
+    _set_string(KEY_SETLIST_SONG, "")
+    try:
+        _save_active_setlist()
+        _set_status("セットリスト「{}」を新規作成しました。".format(name))
+    except core.SongCreditError as exc:
+        _set_status(str(exc))
+    return True
+
+
+def _on_save_setlist_clicked(props, prop):
+    try:
+        _save_active_setlist()
+        _set_status("セットリスト「{}」を保存しました。".format(_active_setlist["name"]))
+    except core.SongCreditError as exc:
+        _set_status(str(exc))
+    return True
+
+
+def _on_open_setlist_clicked(props, prop):
+    global _active_setlist
+    name = _state[KEY_SETLIST_LIBRARY].strip()
+    if not name:
+        _set_status("保存済みセットリストを選択してください。")
+        return True
+    try:
+        _active_setlist = core.load_setlist(name)
+        _set_string(KEY_SETLIST_NAME, _active_setlist["name"])
+        _set_string(KEY_SETLIST_LIBRARY, _active_setlist["name"])
+        _set_string(KEY_SETLIST_SONG, "0" if _active_setlist["items"] else "")
+        if _active_setlist["items"]:
+            _set_record_fields(_active_setlist["items"][0])
+        _refresh_setlist_properties()
+        _set_status("セットリスト「{}」を開きました。".format(_active_setlist["name"]))
+    except core.SongCreditError as exc:
+        _set_status(str(exc))
+    return True
+
+
+def _on_add_to_setlist_clicked(props, prop):
+    if not _active_setlist["name"]:
+        _set_status("先にセットリストを新規作成するか、保存済みセットリストを開いてください。")
+        return True
+    record = _current_record()
+    if not record["title"]:
+        _set_status("追加する曲の表示タイトルを入力してください。")
+        return True
+    _active_setlist["items"].append(record)
+    _set_string(KEY_SETLIST_SONG, str(len(_active_setlist["items"]) - 1))
+    try:
+        _save_active_setlist()
+        _set_status("「{}」をセットリストへ追加しました。".format(record["title"]))
+    except core.SongCreditError as exc:
+        _set_status(str(exc))
+    return True
+
+
+def _on_update_setlist_song_clicked(props, prop):
+    index = _setlist_index()
+    if index < 0:
+        _set_status("更新するセットリスト曲を選択してください。")
+        return True
+    record = _current_record()
+    if not record["title"]:
+        _set_status("表示タイトルを入力してください。")
+        return True
+    _active_setlist["items"][index] = record
+    try:
+        _save_active_setlist()
+        _set_status("{}曲目を「{}」で更新しました。".format(index + 1, record["title"]))
+    except core.SongCreditError as exc:
+        _set_status(str(exc))
+    return True
+
+
+def _on_remove_setlist_song_clicked(props, prop):
+    index = _setlist_index()
+    if index < 0:
+        _set_status("削除するセットリスト曲を選択してください。")
+        return True
+    removed = _active_setlist["items"].pop(index)
+    next_index = min(index, len(_active_setlist["items"]) - 1)
+    _set_string(KEY_SETLIST_SONG, str(next_index) if next_index >= 0 else "")
+    try:
+        _save_active_setlist()
+        _set_status("「{}」をセットリストから削除しました。".format(removed.get("title") or ""))
+    except core.SongCreditError as exc:
+        _set_status(str(exc))
+    return True
+
+
+def _move_setlist_song(delta):
+    index = _setlist_index()
+    target = index + delta
+    if index < 0 or not (0 <= target < len(_active_setlist["items"])):
+        _set_status("これ以上、曲順を移動できません。")
+        return False
+    items = _active_setlist["items"]
+    items[index], items[target] = items[target], items[index]
+    _set_string(KEY_SETLIST_SONG, str(target))
+    try:
+        _save_active_setlist()
+    except core.SongCreditError as exc:
+        _set_status(str(exc))
+        return False
+    _set_status("曲順を{}へ移動しました。".format("上" if delta < 0 else "下"))
+    return True
+
+
+def _on_move_setlist_song_up_clicked(props, prop):
+    _move_setlist_song(-1)
+    return True
+
+
+def _on_move_setlist_song_down_clicked(props, prop):
+    _move_setlist_song(1)
+    return True
+
+
+def _display_setlist_index(index):
+    if not (0 <= index < len(_active_setlist["items"])):
+        _set_status("表示するセットリスト曲を選択してください。")
+        return False
+    item = _active_setlist["items"][index]
+    _set_string(KEY_SETLIST_SONG, str(index))
+    _set_record_fields(item)
+    if not _show_overlay(True):
+        return False
+    _set_string(KEY_NOW_PLAYING, "{}曲目：{}".format(index + 1, core.record_label(item)))
+    if _history:
+        _set_string(KEY_HISTORY, core.history_key(_history[0]))
+    _refresh_history_property(_ui_props.get("live"))
+    _refresh_setlist_properties()
+    return True
+
+
+def _on_display_selected_setlist_song_clicked(props, prop):
+    _display_setlist_index(_setlist_index())
+    return True
+
+
+def _on_load_selected_setlist_song_clicked(props, prop):
+    index = _setlist_index()
+    if index < 0:
+        _set_status("入力欄へ読み込むセットリスト曲を選択してください。")
+        return True
+    item = _active_setlist["items"][index]
+    _set_record_fields(item)
+    _set_status("{}曲目「{}」を編集欄へ読み込みました。".format(index + 1, item.get("title") or ""))
+    return True
+
+
+def _on_previous_setlist_song_clicked(props, prop):
+    index = _setlist_index()
+    if index <= 0:
+        _set_status("これがセットリストの先頭です。")
+    else:
+        _display_setlist_index(index - 1)
+    return True
+
+
+def _on_next_setlist_song_clicked(props, prop):
+    index = _setlist_index()
+    target = 0 if index < 0 else index + 1
+    if target >= len(_active_setlist["items"]):
+        _set_status("これがセットリストの最後です。")
+    else:
+        _display_setlist_index(target)
+    return True
+
+
+def _on_emergency_show_clicked(props, prop):
+    if _show_overlay(True):
+        record = _current_record()
+        _set_string(KEY_NOW_PLAYING, "リクエスト／臨時：{}".format(core.record_label(record)))
+        if _history:
+            _set_string(KEY_HISTORY, core.history_key(_history[0]))
+        _refresh_history_property(_ui_props.get("live"))
     return True
 
 
@@ -455,11 +741,7 @@ def _hide_overlay():
 
 
 def _on_show_clicked(props, prop):
-    if _show_overlay(True):
-        if _history:
-            _set_string(KEY_HISTORY, core.history_key(_history[0]))
-        _refresh_history_property(props)
-    return True
+    return _on_emergency_show_clicked(props, prop)
 
 
 def _on_hide_clicked(props, prop):
@@ -479,9 +761,9 @@ def _on_hide_hotkey(pressed):
 
 def script_description():
     return (
-        "<b>Song Credit Overlay 0.1.3</b><br>"
-        "MusicBrainzで楽曲を検索し、曲名・アーティスト・作詞／作曲／編曲を "
-        "OBSの専用テキストソースへ表示します。検索結果は必ず確認し、必要に応じて修正してください。"
+        "<b>Song Credit Overlay 0.2.0</b><br>"
+        "配信前は複数のセットリストを作成・保存し、配信中は前／次ボタンで即切替できます。"
+        "リクエスト曲はセットリストを変更せず緊急表示できます。"
     )
 
 
@@ -492,8 +774,13 @@ def script_defaults(settings):
     obs.obs_data_set_default_bool(settings, KEY_SAVE_HISTORY, True)
     obs.obs_data_set_default_bool(settings, KEY_AUTO_LAYOUT, True)
     obs.obs_data_set_default_bool(settings, KEY_LAYOUT_APPLIED, False)
+    obs.obs_data_set_default_string(settings, KEY_SETLIST_LIBRARY, "")
+    obs.obs_data_set_default_string(settings, KEY_SETLIST_NAME, "")
+    obs.obs_data_set_default_string(settings, KEY_SETLIST_SONG, "")
+    obs.obs_data_set_default_string(settings, KEY_SETLIST_SUMMARY, "セットリスト未選択")
+    obs.obs_data_set_default_string(settings, KEY_NOW_PLAYING, "まだ表示していません")
     obs.obs_data_set_default_string(
-        settings, KEY_STATUS, "曲名を入力して検索するか、表示内容を手動入力してください。"
+        settings, KEY_STATUS, "配信前はセットリストを開くか、リクエスト欄から曲を追加してください。"
     )
 
 
@@ -517,6 +804,11 @@ def script_update(settings):
         KEY_CREDIT_SOURCE,
         KEY_FORMAT,
         KEY_HISTORY,
+        KEY_SETLIST_LIBRARY,
+        KEY_SETLIST_NAME,
+        KEY_SETLIST_SONG,
+        KEY_SETLIST_SUMMARY,
+        KEY_NOW_PLAYING,
     ]
     for key in string_keys:
         _state[key] = obs.obs_data_get_string(settings, key) or ""
@@ -526,64 +818,206 @@ def script_update(settings):
 
 
 def script_properties():
+    global _ui_props
     props = obs.obs_properties_create()
 
-    obs.obs_properties_add_text(props, KEY_QUERY_TITLE, "検索する曲名", obs.OBS_TEXT_DEFAULT)
-    obs.obs_properties_add_text(
-        props, KEY_QUERY_ARTIST, "アーティスト（任意）", obs.OBS_TEXT_DEFAULT
+    obs.obs_properties_add_text(props, KEY_STATUS, "現在の状態", obs.OBS_TEXT_INFO)
+
+    live_props = obs.obs_properties_create()
+    saved_setlists = [(name, name) for name in _setlist_names]
+    _add_string_list(
+        live_props,
+        KEY_SETLIST_LIBRARY,
+        "使うセットリスト",
+        saved_setlists,
+        "保存済みセットリストなし",
     )
-    obs.obs_properties_add_button(props, "search_button", "MusicBrainzを検索", _on_search_clicked)
+    obs.obs_properties_add_button(
+        live_props, "open_setlist_button", "選択したセットリストを開く", _on_open_setlist_clicked
+    )
+    setlist_songs = [
+        ("{:02d}. {}".format(index + 1, core.record_label(item)), str(index))
+        for index, item in enumerate(_active_setlist["items"])
+    ]
+    _add_string_list(live_props, KEY_SETLIST_SONG, "次に出す曲", setlist_songs, "曲なし")
+    obs.obs_properties_add_button(
+        live_props, "previous_setlist_song_button", "◀ 前の曲を表示", _on_previous_setlist_song_clicked
+    )
+    obs.obs_properties_add_button(
+        live_props,
+        "display_selected_setlist_song_button",
+        "選択した曲を表示",
+        _on_display_selected_setlist_song_clicked,
+    )
+    obs.obs_properties_add_button(
+        live_props, "next_setlist_song_button", "次の曲を表示 ▶", _on_next_setlist_song_clicked
+    )
+    obs.obs_properties_add_button(
+        live_props, "live_hide_button", "曲間：表示を消す", _on_hide_clicked
+    )
+    obs.obs_properties_add_text(live_props, KEY_NOW_PLAYING, "現在表示中", obs.OBS_TEXT_INFO)
+    history_items = [(core.record_label(item), core.history_key(item)) for item in _history]
+    _add_string_list(live_props, KEY_HISTORY, "最近使った曲", history_items, "履歴なし")
+    obs.obs_properties_add_button(
+        live_props, "display_history_button", "最近使った曲を再表示", _on_display_history_clicked
+    )
+    obs.obs_properties_add_group(
+        props, "live_group", "① 配信中：曲を切り替える", obs.OBS_GROUP_NORMAL, live_props
+    )
+
+    prep_props = obs.obs_properties_create()
+    obs.obs_properties_add_text(
+        prep_props, KEY_SETLIST_NAME, "セットリスト名", obs.OBS_TEXT_DEFAULT
+    )
+    obs.obs_properties_add_button(
+        prep_props, "create_setlist_button", "この名前で新規作成", _on_create_setlist_clicked
+    )
+    obs.obs_properties_add_button(
+        prep_props, "save_setlist_button", "現在のセットリストを保存", _on_save_setlist_clicked
+    )
+    obs.obs_properties_add_text(
+        prep_props, KEY_SETLIST_SUMMARY, "現在編集中", obs.OBS_TEXT_INFO
+    )
+    obs.obs_properties_add_button(
+        prep_props,
+        "load_selected_setlist_song_button",
+        "選択曲を下の編集欄へ読み込む",
+        _on_load_selected_setlist_song_clicked,
+    )
+    obs.obs_properties_add_button(
+        prep_props,
+        "update_setlist_song_button",
+        "編集内容で選択曲を更新",
+        _on_update_setlist_song_clicked,
+    )
+    obs.obs_properties_add_button(
+        prep_props, "move_setlist_song_up_button", "選択曲を上へ", _on_move_setlist_song_up_clicked
+    )
+    obs.obs_properties_add_button(
+        prep_props,
+        "move_setlist_song_down_button",
+        "選択曲を下へ",
+        _on_move_setlist_song_down_clicked,
+    )
+    obs.obs_properties_add_button(
+        prep_props,
+        "remove_setlist_song_button",
+        "選択曲をセットリストから削除",
+        _on_remove_setlist_song_clicked,
+    )
+    obs.obs_properties_add_group(
+        props, "prep_group", "② 配信前：セットリストを作る", obs.OBS_GROUP_NORMAL, prep_props
+    )
+
+    request_props = obs.obs_properties_create()
+    obs.obs_properties_add_text(
+        request_props, KEY_QUERY_TITLE, "検索する曲名", obs.OBS_TEXT_DEFAULT
+    )
+    obs.obs_properties_add_text(
+        request_props, KEY_QUERY_ARTIST, "アーティスト（任意）", obs.OBS_TEXT_DEFAULT
+    )
+    obs.obs_properties_add_button(
+        request_props, "search_button", "曲を検索", _on_search_clicked
+    )
 
     candidates = [(_candidate_label(item), item["id"]) for item in _search_results]
-    _add_string_list(props, KEY_CANDIDATE, "検索候補", candidates, "候補なし")
+    _add_string_list(request_props, KEY_CANDIDATE, "検索候補", candidates, "候補なし")
     obs.obs_properties_add_button(
-        props, "load_candidate_button", "選択候補のクレジットを取得", _on_load_candidate_clicked
+        request_props,
+        "load_candidate_button",
+        "選択候補のクレジットを取得",
+        _on_load_candidate_clicked,
     )
 
-    obs.obs_properties_add_text(props, KEY_TITLE, "表示タイトル", obs.OBS_TEXT_DEFAULT)
-    obs.obs_properties_add_text(props, KEY_ARTIST, "表示アーティスト", obs.OBS_TEXT_DEFAULT)
-    obs.obs_properties_add_text(props, KEY_LYRICISTS, "作詞（複数は「、」区切り）", obs.OBS_TEXT_DEFAULT)
-    obs.obs_properties_add_text(props, KEY_COMPOSERS, "作曲（複数は「、」区切り）", obs.OBS_TEXT_DEFAULT)
-    obs.obs_properties_add_text(props, KEY_ARRANGERS, "編曲（複数は「、」区切り）", obs.OBS_TEXT_DEFAULT)
+    obs.obs_properties_add_text(request_props, KEY_TITLE, "表示タイトル", obs.OBS_TEXT_DEFAULT)
+    obs.obs_properties_add_text(request_props, KEY_ARTIST, "表示アーティスト", obs.OBS_TEXT_DEFAULT)
     obs.obs_properties_add_text(
-        props, KEY_WRITERS, "Writer／役割未確定（要確認）", obs.OBS_TEXT_DEFAULT
+        request_props, KEY_LYRICISTS, "作詞（複数は「、」区切り）", obs.OBS_TEXT_DEFAULT
     )
-    obs.obs_properties_add_text(props, KEY_NOTES, "確認事項", obs.OBS_TEXT_MULTILINE)
-
-    sources = [(name, name) for name in _text_sources()]
-    _add_string_list(props, KEY_TITLE_SOURCE, "曲名の出力先", sources, "使用しない")
-    _add_string_list(props, KEY_ARTIST_SOURCE, "アーティストの出力先", sources, "使用しない")
-    _add_string_list(props, KEY_CREDIT_SOURCE, "クレジットの出力先", sources, "使用しない")
-    obs.obs_properties_add_bool(
-        props, KEY_AUTO_LAYOUT, "初回表示時に1920×1080の下部へ自動配置"
+    obs.obs_properties_add_text(
+        request_props, KEY_COMPOSERS, "作曲（複数は「、」区切り）", obs.OBS_TEXT_DEFAULT
+    )
+    obs.obs_properties_add_text(
+        request_props, KEY_ARRANGERS, "編曲（複数は「、」区切り）", obs.OBS_TEXT_DEFAULT
+    )
+    obs.obs_properties_add_text(
+        request_props, KEY_WRITERS, "Writer／役割未確定（要確認）", obs.OBS_TEXT_DEFAULT
+    )
+    obs.obs_properties_add_text(request_props, KEY_NOTES, "確認事項", obs.OBS_TEXT_MULTILINE)
+    obs.obs_properties_add_button(
+        request_props,
+        "emergency_show_button",
+        "リクエスト／臨時曲を今すぐ表示",
+        _on_emergency_show_clicked,
     )
     obs.obs_properties_add_button(
+        request_props,
+        "add_to_setlist_button",
+        "この曲を現在のセットリストへ追加",
+        _on_add_to_setlist_clicked,
+    )
+    obs.obs_properties_add_group(
         props,
+        "request_group",
+        "③ リクエスト対応／曲を検索・編集",
+        obs.OBS_GROUP_NORMAL,
+        request_props,
+    )
+
+    setup_props = obs.obs_properties_create()
+    sources = [(name, name) for name in _text_sources()]
+    _add_string_list(setup_props, KEY_TITLE_SOURCE, "曲名の出力先", sources, "使用しない")
+    _add_string_list(
+        setup_props, KEY_ARTIST_SOURCE, "アーティストの出力先", sources, "使用しない"
+    )
+    _add_string_list(
+        setup_props, KEY_CREDIT_SOURCE, "クレジットの出力先", sources, "使用しない"
+    )
+    obs.obs_properties_add_bool(
+        setup_props, KEY_AUTO_LAYOUT, "初回表示時に1920×1080の下部へ自動配置"
+    )
+    obs.obs_properties_add_button(
+        setup_props,
         "apply_lower_third_layout_button",
         "出力先を1920×1080の下部へ配置し直す",
         _on_apply_layout_clicked,
     )
 
     formats = [("日本語", "jp"), ("English", "en"), ("コンパクト", "compact")]
-    _add_string_list(props, KEY_FORMAT, "クレジット表記", formats)
-    obs.obs_properties_add_bool(props, KEY_SAVE_HISTORY, "表示時に履歴へ保存")
-
-    obs.obs_properties_add_button(props, "show_button", "OBSへ表示", _on_show_clicked)
-    obs.obs_properties_add_button(props, "hide_button", "非表示（出力先を空にする）", _on_hide_clicked)
-
-    history_items = [(core.record_label(item), core.history_key(item)) for item in _history]
-    _add_string_list(props, KEY_HISTORY, "最近使った楽曲", history_items, "履歴なし")
-    obs.obs_properties_add_button(
-        props, "load_history_button", "選択した履歴を読み込む", _on_load_history_clicked
+    _add_string_list(setup_props, KEY_FORMAT, "クレジット表記", formats)
+    obs.obs_properties_add_bool(setup_props, KEY_SAVE_HISTORY, "表示時に履歴へ保存")
+    obs.obs_properties_add_group(
+        props,
+        "setup_group",
+        "④ 初期設定（通常は触らない）",
+        obs.OBS_GROUP_NORMAL,
+        setup_props,
     )
 
-    obs.obs_properties_add_text(props, KEY_STATUS, "状態", obs.OBS_TEXT_INFO)
+    _ui_props = {
+        "root": props,
+        "live": live_props,
+        "prep": prep_props,
+        "request": request_props,
+        "setup": setup_props,
+    }
     return props
 
 
 def script_load(settings):
-    global _show_hotkey_id, _hide_hotkey_id
+    global _show_hotkey_id, _hide_hotkey_id, _active_setlist
     _refresh_history()
+    _refresh_setlist_names()
+    saved_setlist = _state[KEY_SETLIST_LIBRARY].strip()
+    if saved_setlist:
+        try:
+            _active_setlist = core.load_setlist(saved_setlist)
+            if _setlist_index() < 0 and _active_setlist["items"]:
+                _set_string(KEY_SETLIST_SONG, "0")
+            _update_setlist_summary()
+        except core.SongCreditError as exc:
+            _active_setlist = {"name": "", "items": []}
+            _set_status(str(exc))
     _show_hotkey_id = obs.obs_hotkey_register_frontend(
         "song_credit_overlay.show", "楽曲クレジット: 表示", _on_show_hotkey
     )

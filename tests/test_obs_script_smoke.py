@@ -3,6 +3,7 @@
 import importlib.util
 import os
 import sys
+import tempfile
 import types
 import unittest
 
@@ -48,6 +49,7 @@ def build_fake_obs():
     module.OBS_TEXT_INFO = 2
     module.OBS_COMBO_TYPE_LIST = 0
     module.OBS_COMBO_FORMAT_STRING = 0
+    module.OBS_GROUP_NORMAL = 0
     module.OBS_BOUNDS_NONE = 0
     module.OBS_ALIGN_LEFT = 1
     module.OBS_ALIGN_TOP = 4
@@ -85,6 +87,17 @@ def build_fake_obs():
     module.obs_properties_add_list = (
         lambda props, key, label, combo_type, combo_format: add_property(
             props, key, label, "list"
+        )
+    )
+    module.obs_properties_add_group = (
+        lambda props, key, label, group_type, group_props: props["properties"].append(
+            {
+                "key": key,
+                "label": label,
+                "kind": "group",
+                "items": [],
+                "group_props": group_props,
+            }
         )
     )
     module.obs_property_list_add_string = (
@@ -148,10 +161,22 @@ class ObsScriptSmokeTests(unittest.TestCase):
         self.script.script_defaults(settings)
         self.script.script_update(settings)
         props = self.script.script_properties()
-        keys = [prop["key"] for prop in props["properties"]]
+        def property_keys(container):
+            keys = []
+            for prop in container["properties"]:
+                keys.append(prop["key"])
+                if prop.get("group_props"):
+                    keys.extend(property_keys(prop["group_props"]))
+            return keys
+
+        keys = property_keys(props)
         self.assertIn(self.script.KEY_QUERY_TITLE, keys)
         self.assertIn(self.script.KEY_TITLE_SOURCE, keys)
-        self.assertIn("show_button", keys)
+        self.assertIn("live_group", keys)
+        self.assertIn("prep_group", keys)
+        self.assertIn("request_group", keys)
+        self.assertIn("emergency_show_button", keys)
+        self.assertIn("next_setlist_song_button", keys)
         self.assertIn("apply_lower_third_layout_button", keys)
 
     def test_candidate_combo_can_be_refreshed_in_place(self):
@@ -169,8 +194,9 @@ class ObsScriptSmokeTests(unittest.TestCase):
                 "disambiguation": "",
             }
         ]
-        self.script._refresh_candidate_property(props)
-        candidate = self.fake_obs.obs_properties_get(props, self.script.KEY_CANDIDATE)
+        request_props = self.script._ui_props["request"]
+        self.script._refresh_candidate_property(request_props)
+        candidate = self.fake_obs.obs_properties_get(request_props, self.script.KEY_CANDIDATE)
         self.assertEqual(1, len(candidate["items"]))
         self.assertEqual("recording-1", candidate["items"][0][1])
 
@@ -182,8 +208,9 @@ class ObsScriptSmokeTests(unittest.TestCase):
         self.script._history = [
             {"title": "履歴の曲", "artist": "履歴の歌手", "source_id": "history-1"}
         ]
-        self.script._refresh_history_property(props)
-        history = self.fake_obs.obs_properties_get(props, self.script.KEY_HISTORY)
+        live_props = self.script._ui_props["live"]
+        self.script._refresh_history_property(live_props)
+        history = self.fake_obs.obs_properties_get(live_props, self.script.KEY_HISTORY)
         self.assertEqual(1, len(history["items"]))
         self.assertEqual("mb:history-1", history["items"][0][1])
 
@@ -210,6 +237,51 @@ class ObsScriptSmokeTests(unittest.TestCase):
         )
         for item in self.fake_obs.scene_items.values():
             self.assertTrue(item.visible)
+
+    def test_setlist_can_be_created_saved_switched_and_emergency_displayed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            original_default_dir = self.script.core.default_setlists_dir
+            self.script.core.default_setlists_dir = lambda: directory
+            try:
+                settings = {
+                    self.script.KEY_SETLIST_NAME: "配信テスト",
+                    self.script.KEY_TITLE_SOURCE: "Song Title",
+                    self.script.KEY_ARTIST_SOURCE: "Song Artist",
+                    self.script.KEY_CREDIT_SOURCE: "Song Credits",
+                    self.script.KEY_FORMAT: "jp",
+                    self.script.KEY_SAVE_HISTORY: False,
+                    self.script.KEY_AUTO_LAYOUT: False,
+                }
+                self.script.script_update(settings)
+                self.script.script_properties()
+                self.script._active_setlist = {"name": "", "items": []}
+                self.script._setlist_names = []
+                self.script._on_create_setlist_clicked(None, None)
+
+                self.script._set_record_fields(
+                    {"title": "一曲目", "artist": "歌手A", "lyricists": [], "composers": []}
+                )
+                self.script._on_add_to_setlist_clicked(None, None)
+                self.script._set_record_fields(
+                    {"title": "二曲目", "artist": "歌手B", "lyricists": [], "composers": []}
+                )
+                self.script._on_add_to_setlist_clicked(None, None)
+
+                saved = self.script.core.load_setlist("配信テスト", directory)
+                self.assertEqual(["一曲目", "二曲目"], [item["title"] for item in saved["items"]])
+
+                self.script._set_string(self.script.KEY_SETLIST_SONG, "0")
+                self.assertTrue(self.script._display_setlist_index(0))
+                self.assertEqual("一曲目", self.fake_obs.sources["Song Title"].settings["text"])
+
+                self.script._set_record_fields(
+                    {"title": "リクエスト曲", "artist": "ゲスト", "lyricists": [], "composers": []}
+                )
+                self.script._on_emergency_show_clicked(None, None)
+                self.assertEqual("リクエスト曲", self.fake_obs.sources["Song Title"].settings["text"])
+                self.assertEqual(2, len(self.script._active_setlist["items"]))
+            finally:
+                self.script.core.default_setlists_dir = original_default_dir
 
     def test_hide_clears_dedicated_sources(self):
         settings = {

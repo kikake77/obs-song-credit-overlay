@@ -8,6 +8,7 @@ formatting, and history persistence can be tested outside OBS Studio.
 import datetime
 import json
 import os
+import re
 import tempfile
 import threading
 import time
@@ -17,7 +18,7 @@ import urllib.request
 
 
 APP_NAME = "SongCreditOverlay"
-APP_VERSION = "0.1.3"
+APP_VERSION = "0.2.0"
 MUSICBRAINZ_BASE_URL = "https://musicbrainz.org/ws/2"
 DEFAULT_TIMEOUT_SECONDS = 12
 MIN_REQUEST_INTERVAL_SECONDS = 1.1
@@ -279,6 +280,97 @@ def default_history_path():
     else:
         root = os.path.join(os.path.expanduser("~"), ".config", "obs-studio", "plugin_config")
     return os.path.join(root, "song-credit-overlay", "history.json")
+
+
+def default_setlists_dir():
+    return os.path.join(os.path.dirname(default_history_path()), "setlists")
+
+
+def _setlist_filename(name):
+    display_name = (name or "").strip()
+    if not display_name:
+        raise SongCreditError("セットリスト名を入力してください。")
+    filename = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", display_name)
+    filename = re.sub(r"\s+", " ", filename).strip(" .")[:80]
+    if not filename:
+        raise SongCreditError("セットリスト名に使用できる文字を入力してください。")
+    return filename + ".json"
+
+
+def setlist_path(name, directory=None):
+    return os.path.join(directory or default_setlists_dir(), _setlist_filename(name))
+
+
+def list_setlists(directory=None):
+    directory = directory or default_setlists_dir()
+    try:
+        filenames = os.listdir(directory)
+    except FileNotFoundError:
+        return []
+    except OSError as exc:
+        raise SongCreditError("セットリスト一覧を読み込めませんでした: {}".format(exc))
+
+    names = []
+    for filename in filenames:
+        if not filename.lower().endswith(".json"):
+            continue
+        path = os.path.join(directory, filename)
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+        except (OSError, TypeError, ValueError):
+            continue
+        name = payload.get("name") if isinstance(payload, dict) else None
+        if isinstance(name, str) and name.strip():
+            names.append(name.strip())
+    return sorted(set(names), key=lambda value: value.casefold())
+
+
+def load_setlist(name, directory=None):
+    path = setlist_path(name, directory)
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except FileNotFoundError:
+        raise SongCreditError("セットリスト「{}」が見つかりません。".format(name))
+    except (OSError, TypeError, ValueError) as exc:
+        raise SongCreditError("セットリストを読み込めませんでした: {}".format(exc))
+    if not isinstance(payload, dict) or not isinstance(payload.get("items"), list):
+        raise SongCreditError("セットリストのファイル形式が正しくありません。")
+    return {
+        "name": (payload.get("name") or name).strip(),
+        "items": [dict(item) for item in payload["items"] if isinstance(item, dict)],
+    }
+
+
+def save_setlist(name, items, directory=None):
+    display_name = (name or "").strip()
+    path = setlist_path(display_name, directory)
+    payload = {
+        "version": 1,
+        "name": display_name,
+        "saved_at": _utc_now(),
+        "items": [dict(item) for item in (items or []) if isinstance(item, dict)],
+    }
+    directory = os.path.dirname(path)
+    os.makedirs(directory, exist_ok=True)
+    temporary_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=directory, delete=False, suffix=".tmp"
+        ) as handle:
+            temporary_path = handle.name
+            json.dump(payload, handle, ensure_ascii=False, indent=2)
+            handle.write("\n")
+        os.replace(temporary_path, path)
+    except OSError as exc:
+        if temporary_path and os.path.exists(temporary_path):
+            try:
+                os.unlink(temporary_path)
+            except OSError:
+                pass
+        raise SongCreditError("セットリストを保存できませんでした: {}".format(exc))
+    return path
 
 
 def load_history(path=None):
