@@ -66,13 +66,19 @@
       min-width: 0;
       overflow: hidden;
       white-space: nowrap;
-      text-overflow: ellipsis;
+      text-overflow: clip;
       text-shadow: 0 3px 14px rgba(0, 0, 0, 0.45);
+    }
+
+    .title.allow-wrap, .artist.allow-wrap, .credits.allow-wrap {
+      overflow: visible;
+      white-space: normal;
+      overflow-wrap: anywhere;
     }
 
     .title {
       color: var(--title);
-      font-size: clamp(42px, 3.3vw, 64px);
+      font-size: 64px;
       font-weight: 800;
       line-height: 1.15;
       letter-spacing: 0.02em;
@@ -81,7 +87,7 @@
     .artist {
       margin-top: 10px;
       color: var(--artist);
-      font-size: clamp(26px, 2vw, 38px);
+      font-size: 38px;
       font-weight: 600;
       line-height: 1.2;
     }
@@ -91,7 +97,7 @@
       padding-top: 18px;
       border-top: 1px solid rgba(255, 255, 255, 0.16);
       color: var(--credits);
-      font-size: clamp(20px, 1.45vw, 28px);
+      font-size: 28px;
       font-weight: 500;
       line-height: 1.25;
     }
@@ -157,33 +163,88 @@
       document.documentElement.dataset.panel = panelOverride || "1";
       document.documentElement.dataset.theme = themeOverride || "dark";
       document.documentElement.dataset.font = "gothic";
+      document.documentElement.dataset.fontSize = "auto";
 
       const lowerThird = document.getElementById("lower-third");
       const title = document.getElementById("title");
       const artist = document.getElementById("artist");
       const credits = document.getElementById("credits");
+      const overlayVersion = 2;
+      const sizePresets = {
+        auto: { title: 64, artist: 38, credits: 28 },
+        small: { title: 46, artist: 28, credits: 20 },
+        medium: { title: 58, artist: 34, credits: 25 },
+        large: { title: 72, artist: 44, credits: 32 },
+      };
       let lastSequence = -1;
       let failures = 0;
+      let lastState = null;
+      let sizingFrame = 0;
 
       function applyStyle(state) {
         document.documentElement.dataset.panel = panelOverride || (state.panel === false ? "0" : "1");
         document.documentElement.dataset.theme = themeOverride || (state.theme === "light" ? "light" : "dark");
         const font = ["gothic", "rounded", "mincho", "sans"].includes(state.font) ? state.font : "gothic";
         document.documentElement.dataset.font = font;
+        const fontSize = ["auto", "small", "medium", "large"].includes(state.font_size)
+          ? state.font_size
+          : "auto";
+        document.documentElement.dataset.fontSize = fontSize;
+      }
+
+      function sizeText(element, preferredSize, minimumSize, autoFit) {
+        element.classList.remove("allow-wrap");
+        const viewportScale = Math.max(0.5, Math.min(1.5, window.innerWidth / 1920));
+        const preferred = Math.max(1, Math.round(preferredSize * viewportScale));
+        const minimum = Math.max(1, Math.round(minimumSize * viewportScale));
+        let size = preferred;
+        element.style.fontSize = `${size}px`;
+        while (autoFit && element.scrollWidth > element.clientWidth && size > minimum) {
+          size -= 1;
+          element.style.fontSize = `${size}px`;
+        }
+        if (element.scrollWidth > element.clientWidth) {
+          element.classList.add("allow-wrap");
+        }
+      }
+
+      function scheduleTextSizing(state) {
+        if (sizingFrame) window.cancelAnimationFrame(sizingFrame);
+        sizingFrame = window.requestAnimationFrame(() => {
+          sizingFrame = 0;
+          const key = ["auto", "small", "medium", "large"].includes(state.font_size)
+            ? state.font_size
+            : "auto";
+          const sizes = sizePresets[key];
+          const autoFit = key === "auto";
+          sizeText(title, sizes.title, 24, autoFit);
+          sizeText(artist, sizes.artist, 18, autoFit);
+          sizeText(credits, sizes.credits, 14, autoFit);
+        });
       }
 
       function applyState(state) {
         failures = 0;
+        if (Number(state.overlay_version || 1) !== overlayVersion) {
+          window.location.reload();
+          return;
+        }
         if (state.sequence === lastSequence) return;
         lastSequence = state.sequence;
+        lastState = state;
         applyStyle(state);
         title.textContent = state.title || "";
         artist.textContent = state.artist || "";
         credits.textContent = state.credits || "";
+        scheduleTextSizing(state);
         const visible = Boolean(state.visible && state.title);
         lowerThird.classList.toggle("visible", visible);
         lowerThird.setAttribute("aria-hidden", visible ? "false" : "true");
       }
+
+      window.addEventListener("resize", () => {
+        if (lastState) scheduleTextSizing(lastState);
+      });
 
       async function poll() {
         try {

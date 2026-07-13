@@ -5,7 +5,10 @@ a = Analysis(
     ["song_credit_manager.py"],
     pathex=[],
     binaries=[],
-    datas=[("web/overlay.html", "web")],
+    datas=[
+        ("web/overlay.html", "web"),
+        ("docs/samples/歌枠セットリスト例.tsv", "docs/samples"),
+    ],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
