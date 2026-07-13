@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Song Credit Manager for OBS</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --panel: linear-gradient(100deg, rgba(12, 17, 28, 0.94), rgba(23, 30, 47, 0.82));
+      --border: rgba(255, 255, 255, 0.2);
+      --title: #ffffff;
+      --artist: #d9e3f3;
+      --credits: #b8c7dc;
+      --accent: #66d9ff;
+      --shadow: rgba(0, 0, 0, 0.35);
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      background: transparent;
+      font-family: "Noto Sans JP", "Yu Gothic UI", "Meiryo", sans-serif;
+    }
+
+    #lower-third {
+      position: absolute;
+      left: 8.333%;
+      right: 8.333%;
+      bottom: 9.25%;
+      opacity: 0;
+      transform: translateY(28px);
+      transition: opacity 220ms ease, transform 260ms cubic-bezier(.2,.75,.25,1);
+      pointer-events: none;
+    }
+
+    #lower-third.visible {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    .card {
+      position: relative;
+      min-height: 260px;
+      padding: 30px 44px 30px 54px;
+      overflow: hidden;
+      border: 1px solid var(--border);
+      border-radius: 22px;
+      background: var(--panel);
+      box-shadow: 0 18px 50px var(--shadow);
+    }
+
+    .card::before {
+      content: "";
+      position: absolute;
+      inset: 0 auto 0 0;
+      width: 10px;
+      background: var(--accent);
+    }
+
+    .title, .artist, .credits {
+      min-width: 0;
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+      text-shadow: 0 3px 14px rgba(0, 0, 0, 0.45);
+    }
+
+    .title {
+      color: var(--title);
+      font-size: clamp(42px, 3.3vw, 64px);
+      font-weight: 800;
+      line-height: 1.15;
+      letter-spacing: 0.02em;
+    }
+
+    .artist {
+      margin-top: 10px;
+      color: var(--artist);
+      font-size: clamp(26px, 2vw, 38px);
+      font-weight: 600;
+      line-height: 1.2;
+    }
+
+    .credits {
+      margin-top: 25px;
+      padding-top: 18px;
+      border-top: 1px solid rgba(255, 255, 255, 0.16);
+      color: var(--credits);
+      font-size: clamp(20px, 1.45vw, 28px);
+      font-weight: 500;
+      line-height: 1.25;
+    }
+
+    html[data-panel="0"] .card {
+      padding-left: 28px;
+      border-color: transparent;
+      background: transparent;
+      box-shadow: none;
+    }
+
+    html[data-panel="0"] .card::before { width: 7px; }
+    html[data-panel="0"] .credits { border-top-color: transparent; padding-top: 0; }
+
+    html[data-theme="light"] {
+      --panel: linear-gradient(100deg, rgba(255, 255, 255, 0.94), rgba(241, 247, 255, 0.84));
+      --border: rgba(36, 48, 70, 0.22);
+      --title: #111827;
+      --artist: #26344a;
+      --credits: #43516a;
+      --accent: #087ea4;
+      --shadow: rgba(25, 35, 55, 0.24);
+      color-scheme: light;
+    }
+
+    html[data-theme="light"] .title,
+    html[data-theme="light"] .artist,
+    html[data-theme="light"] .credits { text-shadow: none; }
+
+    html[data-theme="light"] .credits { border-top-color: rgba(36, 48, 70, 0.16); }
+
+    html[data-font="gothic"] body {
+      font-family: "Noto Sans JP", "Yu Gothic UI", "Meiryo", sans-serif;
+    }
+
+    html[data-font="rounded"] body {
+      font-family: "M PLUS Rounded 1c", "BIZ UDPGothic", "Yu Gothic UI", "Meiryo", sans-serif;
+    }
+
+    html[data-font="mincho"] body {
+      font-family: "Noto Serif JP", "Yu Mincho", "BIZ UDPMincho", serif;
+    }
+
+    html[data-font="sans"] body {
+      font-family: "Segoe UI", "Arial", "Yu Gothic UI", sans-serif;
+    }
+  </style>
+</head>
+<body>
+  <section id="lower-third" aria-live="polite" aria-hidden="true">
+    <div class="card">
+      <div id="title" class="title"></div>
+      <div id="artist" class="artist"></div>
+      <div id="credits" class="credits"></div>
+    </div>
+  </section>
+
+  <script>
+    (() => {
+      const params = new URLSearchParams(location.search);
+      const panelOverride = params.has("panel") ? (params.get("panel") === "0" ? "0" : "1") : null;
+      const themeOverride = params.has("theme") ? (params.get("theme") === "light" ? "light" : "dark") : null;
+      document.documentElement.dataset.panel = panelOverride || "1";
+      document.documentElement.dataset.theme = themeOverride || "dark";
+      document.documentElement.dataset.font = "gothic";
+
+      const lowerThird = document.getElementById("lower-third");
+      const title = document.getElementById("title");
+      const artist = document.getElementById("artist");
+      const credits = document.getElementById("credits");
+      let lastSequence = -1;
+      let failures = 0;
+
+      function applyStyle(state) {
+        document.documentElement.dataset.panel = panelOverride || (state.panel === false ? "0" : "1");
+        document.documentElement.dataset.theme = themeOverride || (state.theme === "light" ? "light" : "dark");
+        const font = ["gothic", "rounded", "mincho", "sans"].includes(state.font) ? state.font : "gothic";
+        document.documentElement.dataset.font = font;
+      }
+
+      function applyState(state) {
+        failures = 0;
+        if (state.sequence === lastSequence) return;
+        lastSequence = state.sequence;
+        applyStyle(state);
+        title.textContent = state.title || "";
+        artist.textContent = state.artist || "";
+        credits.textContent = state.credits || "";
+        const visible = Boolean(state.visible && state.title);
+        lowerThird.classList.toggle("visible", visible);
+        lowerThird.setAttribute("aria-hidden", visible ? "false" : "true");
+      }
+
+      async function poll() {
+        try {
+          const response = await fetch(`/api/state?t=${Date.now()}`, { cache: "no-store" });
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          applyState(await response.json());
+        } catch (error) {
+          failures += 1;
+          if (failures >= 10) {
+            lowerThird.classList.remove("visible");
+            lowerThird.setAttribute("aria-hidden", "true");
+          }
+        } finally {
+          window.setTimeout(poll, 300);
+        }
+      }
+
+      poll();
+    })();
+  </script>
+</body>
+</html>

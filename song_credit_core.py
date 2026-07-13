@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Core functions for Song Credit Overlay.
+"""Core functions for Song Credit Manager for OBS.
 
 This module intentionally has no OBS dependency so that search parsing, credit
 formatting, and history persistence can be tested outside OBS Studio.
@@ -17,8 +17,8 @@ import urllib.parse
 import urllib.request
 
 
-APP_NAME = "SongCreditOverlay"
-APP_VERSION = "0.2.0"
+APP_NAME = "SongCreditManagerForOBS"
+APP_VERSION = "0.4.0"
 MUSICBRAINZ_BASE_URL = "https://musicbrainz.org/ws/2"
 DEFAULT_TIMEOUT_SECONDS = 12
 MIN_REQUEST_INTERVAL_SECONDS = 1.1
@@ -92,6 +92,38 @@ def parse_search_response(payload):
             }
         )
     return results
+
+
+def parse_search_page(payload, fallback_offset=0):
+    """Return one MusicBrainz result page with its reported total count."""
+    items = parse_search_response(payload)
+    try:
+        total = max(0, int(payload.get("count")))
+    except (TypeError, ValueError):
+        total = len(items)
+    try:
+        offset = max(0, int(payload.get("offset")))
+    except (TypeError, ValueError):
+        offset = max(0, int(fallback_offset))
+    return {
+        "items": items,
+        "count": max(total, offset + len(items)),
+        "offset": offset,
+    }
+
+
+def artist_candidates(search_results):
+    """Return unique artist-credit labels in search-result order."""
+    values = []
+    seen = set()
+    for result in search_results or []:
+        artist = (result.get("artist") or "").strip()
+        key = artist.casefold()
+        if not artist or key in seen:
+            continue
+        seen.add(key)
+        values.append(artist)
+    return values
 
 
 def _collect_people(relationships, buckets, notes):
@@ -225,11 +257,16 @@ class MusicBrainzClient(object):
         except (TypeError, ValueError):
             raise SongCreditError("MusicBrainzから不正な応答を受信しました。")
 
-    def search_recordings(self, title, artist="", limit=8):
+    def search_recordings_page(self, title, artist="", limit=20, offset=0):
         title = (title or "").strip()
         artist = (artist or "").strip()
         if not title:
             raise SongCreditError("曲名を入力してください。")
+        try:
+            limit = max(1, min(int(limit), 50))
+            offset = max(0, int(offset))
+        except (TypeError, ValueError):
+            raise SongCreditError("検索件数または開始位置が正しくありません。")
         query_parts = ['recording:"{}"'.format(_escape_lucene_phrase(title))]
         if artist:
             query_parts.append('artist:"{}"'.format(_escape_lucene_phrase(artist)))
@@ -238,10 +275,14 @@ class MusicBrainzClient(object):
             {
                 "query": " AND ".join(query_parts),
                 "fmt": "json",
-                "limit": max(1, min(int(limit), 15)),
+                "limit": limit,
+                "offset": offset,
             },
         )
-        return parse_search_response(payload)
+        return parse_search_page(payload, fallback_offset=offset)
+
+    def search_recordings(self, title, artist="", limit=8):
+        return self.search_recordings_page(title, artist, limit=limit, offset=0)["items"]
 
     def fetch_credits(self, recording_id):
         recording_id = (recording_id or "").strip()
