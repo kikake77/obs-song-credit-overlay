@@ -95,7 +95,7 @@ SCENE_ITEM_BOUNDS_SCALE_INNER = 2
 
 
 def _log(level, message):
-    obs.script_log(level, "[Song Credit Overlay] " + str(message))
+    obs.script_log(level, "[Song Credit Manager for OBS] " + str(message))
 
 
 def _set_status(message):
@@ -761,7 +761,7 @@ def _on_hide_hotkey(pressed):
 
 def script_description():
     return (
-        "<b>Song Credit Overlay 0.2.0</b><br>"
+        "<b>Song Credit Manager for OBS 0.4.0</b><br>"
         "配信前は複数のセットリストを作成・保存し、配信中は前／次ボタンで即切替できます。"
         "リクエスト曲はセットリストを変更せず緊急表示できます。"
     )

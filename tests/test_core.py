@@ -37,6 +37,50 @@ class SearchParsingTests(unittest.TestCase):
         self.assertEqual("Singer A & Singer B", results[0]["artist"])
         self.assertEqual(98, results[0]["score"])
 
+    def test_parse_search_page_preserves_total_and_offset(self):
+        payload = {
+            "count": 123,
+            "offset": 20,
+            "recordings": [
+                {
+                    "id": "recording-2",
+                    "title": "次のページ",
+                    "artist-credit": [{"name": "Singer"}],
+                }
+            ],
+        }
+        page = core.parse_search_page(payload)
+        self.assertEqual(123, page["count"])
+        self.assertEqual(20, page["offset"])
+        self.assertEqual("次のページ", page["items"][0]["title"])
+
+    def test_artist_candidates_are_unique_and_keep_result_order(self):
+        values = core.artist_candidates(
+            [
+                {"artist": "Singer B"},
+                {"artist": "Singer A"},
+                {"artist": "singer b"},
+                {"artist": ""},
+            ]
+        )
+        self.assertEqual(["Singer B", "Singer A"], values)
+
+    def test_search_page_uses_limit_and_offset(self):
+        client = core.MusicBrainzClient()
+        captured = {}
+
+        def fake_request(path, params):
+            captured["path"] = path
+            captured["params"] = params
+            return {"count": 60, "offset": 20, "recordings": []}
+
+        client._request_json = fake_request
+        page = client.search_recordings_page("テスト曲", "歌手", limit=20, offset=20)
+        self.assertEqual(60, page["count"])
+        self.assertEqual(20, captured["params"]["limit"])
+        self.assertEqual(20, captured["params"]["offset"])
+        self.assertIn('artist:"歌手"', captured["params"]["query"])
+
 
 class CreditParsingTests(unittest.TestCase):
     def test_parse_credit_roles(self):
