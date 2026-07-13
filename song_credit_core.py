@@ -18,7 +18,7 @@ import urllib.request
 
 
 APP_NAME = "SongCreditManagerForOBS"
-APP_VERSION = "0.4.0"
+APP_VERSION = "0.4.1"
 MUSICBRAINZ_BASE_URL = "https://musicbrainz.org/ws/2"
 DEFAULT_TIMEOUT_SECONDS = 12
 MIN_REQUEST_INTERVAL_SECONDS = 1.1

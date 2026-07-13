@@ -11,6 +11,7 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 import song_credit_core as core
+import song_credit_manager as manager_app
 import song_credit_manager_core as manager_core
 
 
@@ -86,17 +87,48 @@ class ManagerSetlistTests(unittest.TestCase):
             self.assertEqual("祝福", rows[0]["曲名"])
             self.assertEqual("Ayase", rows[0]["作詞"])
 
+    def test_bundled_tutorial_setlist_has_all_sample_songs(self):
+        path = os.path.join(ROOT, "docs", "samples", "歌枠セットリスト例.tsv")
+        payload = manager_core.load_setlist_file(path)
+        self.assertEqual(123, len(payload["items"]))
+        self.assertEqual("愛を伝えたいだとか", payload["items"][0]["title"])
+        self.assertEqual("ワールドイズマイン", payload["items"][-1]["title"])
+        self.assertTrue(
+            all(
+                item["lyricists"] or item["composers"] or item["writers"]
+                for item in payload["items"]
+            )
+        )
+
+    def test_default_tutorial_uses_a_stable_ten_song_selection(self):
+        first = manager_app.load_bundled_tutorial_document()
+        second = manager_app.load_bundled_tutorial_document()
+        self.assertEqual(10, len(first.items))
+        self.assertEqual(
+            [item["title"] for item in first.items],
+            [item["title"] for item in second.items],
+        )
+        self.assertFalse(first.dirty)
+        self.assertEqual("", first.path)
+
 
 class OverlayStateTests(unittest.TestCase):
     def test_display_settings_round_trip_and_invalid_values_fall_back(self):
         with tempfile.TemporaryDirectory() as directory:
             path = os.path.join(directory, "settings.json")
             saved = manager_core.save_display_settings(
-                {"theme": "light", "panel": False, "font": "mincho", "credit_style": "en"},
+                {
+                    "theme": "light",
+                    "panel": False,
+                    "font": "mincho",
+                    "font_size": "large",
+                    "credit_style": "en",
+                },
                 path,
             )
             self.assertEqual("light", saved["theme"])
             self.assertFalse(saved["panel"])
+            self.assertEqual("large", saved["font_size"])
             self.assertEqual(saved, manager_core.load_display_settings(path))
 
             with open(path, "w", encoding="utf-8") as handle:
@@ -119,11 +151,12 @@ class OverlayStateTests(unittest.TestCase):
             self.assertEqual("light", loaded["theme"])
             self.assertFalse(loaded["panel"])
             self.assertEqual("rounded", loaded["font"])
+            self.assertEqual("auto", loaded["font_size"])
             self.assertEqual("compact", loaded["credit_style"])
 
     def test_overlay_state_can_show_and_hide(self):
         store = manager_core.OverlayStateStore(
-            {"theme": "light", "panel": False, "font": "mincho"}
+            {"theme": "light", "panel": False, "font": "mincho", "font_size": "large"}
         )
         shown = store.show_record(
             {
@@ -134,16 +167,19 @@ class OverlayStateTests(unittest.TestCase):
             }
         )
         self.assertTrue(shown["visible"])
+        self.assertEqual(manager_core.OVERLAY_PROTOCOL_VERSION, shown["overlay_version"])
         self.assertEqual("祝福", shown["title"])
         self.assertIn("作詞：Ayase", shown["credits"])
         self.assertEqual("light", shown["theme"])
         self.assertFalse(shown["panel"])
         self.assertEqual("mincho", shown["font"])
+        self.assertEqual("large", shown["font_size"])
 
-        restyled = store.set_style(theme="dark", panel=True, font="rounded")
+        restyled = store.set_style(theme="dark", panel=True, font="rounded", font_size="small")
         self.assertEqual("dark", restyled["theme"])
         self.assertTrue(restyled["panel"])
         self.assertEqual("rounded", restyled["font"])
+        self.assertEqual("small", restyled["font_size"])
         self.assertTrue(restyled["visible"])
         self.assertEqual("祝福", restyled["title"])
 

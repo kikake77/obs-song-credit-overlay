@@ -11,16 +11,19 @@ import song_credit_core as core
 
 SETLIST_VERSION = 1
 SETLIST_EXTENSION = ".scolist.json"
-SETTINGS_VERSION = 1
+SETTINGS_VERSION = 2
+OVERLAY_PROTOCOL_VERSION = 2
 PRODUCT_DIRECTORY = "Song Credit Manager for OBS"
 LEGACY_PRODUCT_DIRECTORY = "Song Credit Overlay"
 DISPLAY_THEMES = ("dark", "light")
 DISPLAY_FONTS = ("gothic", "rounded", "mincho", "sans")
+DISPLAY_FONT_SIZES = ("auto", "small", "medium", "large")
 DISPLAY_CREDIT_STYLES = ("jp", "en", "compact")
 DEFAULT_DISPLAY_SETTINGS = {
     "theme": "dark",
     "panel": True,
     "font": "gothic",
+    "font_size": "auto",
     "credit_style": "jp",
 }
 
@@ -114,6 +117,9 @@ def normalize_display_settings(settings):
     source = settings if isinstance(settings, dict) else {}
     theme = str(source.get("theme") or DEFAULT_DISPLAY_SETTINGS["theme"]).strip().casefold()
     font = str(source.get("font") or DEFAULT_DISPLAY_SETTINGS["font"]).strip().casefold()
+    font_size = str(
+        source.get("font_size") or DEFAULT_DISPLAY_SETTINGS["font_size"]
+    ).strip().casefold()
     credit_style = str(
         source.get("credit_style") or DEFAULT_DISPLAY_SETTINGS["credit_style"]
     ).strip().casefold()
@@ -121,6 +127,11 @@ def normalize_display_settings(settings):
         "theme": theme if theme in DISPLAY_THEMES else DEFAULT_DISPLAY_SETTINGS["theme"],
         "panel": bool(source.get("panel", DEFAULT_DISPLAY_SETTINGS["panel"])),
         "font": font if font in DISPLAY_FONTS else DEFAULT_DISPLAY_SETTINGS["font"],
+        "font_size": (
+            font_size
+            if font_size in DISPLAY_FONT_SIZES
+            else DEFAULT_DISPLAY_SETTINGS["font_size"]
+        ),
         "credit_style": (
             credit_style
             if credit_style in DISPLAY_CREDIT_STYLES
@@ -381,6 +392,7 @@ class OverlayStateStore(object):
         settings = normalize_display_settings(display_settings)
         self._state = {
             "sequence": 0,
+            "overlay_version": OVERLAY_PROTOCOL_VERSION,
             "visible": False,
             "title": "",
             "artist": "",
@@ -388,6 +400,7 @@ class OverlayStateStore(object):
             "theme": settings["theme"],
             "panel": settings["panel"],
             "font": settings["font"],
+            "font_size": settings["font_size"],
             "updated_at": _utc_now(),
         }
 
@@ -408,13 +421,16 @@ class OverlayStateStore(object):
             )
             return dict(self._state)
 
-    def set_style(self, theme=None, panel=None, font=None):
+    def set_style(self, theme=None, panel=None, font=None, font_size=None):
         with self._lock:
             settings = normalize_display_settings(
                 {
                     "theme": theme if theme is not None else self._state["theme"],
                     "panel": panel if panel is not None else self._state["panel"],
                     "font": font if font is not None else self._state["font"],
+                    "font_size": (
+                        font_size if font_size is not None else self._state["font_size"]
+                    ),
                 }
             )
             self._sequence += 1
@@ -424,6 +440,7 @@ class OverlayStateStore(object):
                     "theme": settings["theme"],
                     "panel": settings["panel"],
                     "font": settings["font"],
+                    "font_size": settings["font_size"],
                     "updated_at": _utc_now(),
                 }
             )

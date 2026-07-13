@@ -1,12 +1,14 @@
 import os
+import random
 import threading
 import webbrowser
 import tkinter as tk
+from tkinter import font as tkfont
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
 import song_credit_core as core
 import song_credit_manager_core as manager_core
-from song_credit_server import DEFAULT_PORT, OverlayServer
+from song_credit_server import DEFAULT_PORT, OverlayServer, resource_path
 
 
 PROJECT_URL = "https://github.com/kikake77/obs-song-credit-overlay"
@@ -26,6 +28,33 @@ FONT_CHOICES = {
 FONT_KEY_TO_LABEL = {value: key for key, value in FONT_CHOICES.items()}
 CREDIT_STYLE_CHOICES = {"日本語": "jp", "英語": "en", "コンパクト": "compact"}
 CREDIT_KEY_TO_LABEL = {value: key for key, value in CREDIT_STYLE_CHOICES.items()}
+FONT_SIZE_CHOICES = {
+    "自動（長い文字を縮小・推奨）": "auto",
+    "小": "small",
+    "標準": "medium",
+    "大": "large",
+}
+FONT_SIZE_KEY_TO_LABEL = {value: key for key, value in FONT_SIZE_CHOICES.items()}
+PREVIEW_FONT_SIZES = {
+    "auto": (20, 12, 10),
+    "small": (16, 10, 8),
+    "medium": (20, 12, 10),
+    "large": (24, 14, 12),
+}
+TUTORIAL_SETLIST_NAME = "チュートリアル：歌枠セットリスト例"
+TUTORIAL_SETLIST_PATH = os.path.join("docs", "samples", "歌枠セットリスト例.tsv")
+TUTORIAL_ITEM_COUNT = 10
+TUTORIAL_RANDOM_SEED = "song-credit-manager-tutorial-v1"
+
+
+def load_bundled_tutorial_document():
+    payload = manager_core.load_setlist_file(resource_path(TUTORIAL_SETLIST_PATH))
+    items = payload["items"]
+    if len(items) > TUTORIAL_ITEM_COUNT:
+        items = random.Random(TUTORIAL_RANDOM_SEED).sample(items, TUTORIAL_ITEM_COUNT)
+    document = manager_core.SetlistDocument(TUTORIAL_SETLIST_NAME, items)
+    document.dirty = False
+    return document
 
 
 class SongCreditManagerApp(object):
@@ -39,7 +68,12 @@ class SongCreditManagerApp(object):
         self.root.geometry("{}x{}".format(initial_width, initial_height))
         self.root.minsize(1040, 680)
 
-        self.document = manager_core.SetlistDocument()
+        self.tutorial_loaded = False
+        try:
+            self.document = load_bundled_tutorial_document()
+            self.tutorial_loaded = True
+        except core.SongCreditError:
+            self.document = manager_core.SetlistDocument()
         self.display_settings = manager_core.load_display_settings()
         self.play_index = -1
         self.overlay_visible = False
@@ -78,6 +112,11 @@ class SongCreditManagerApp(object):
         self.display_preset_var = tk.StringVar(value=self._preset_label_from_settings())
         self.font_choice_var = tk.StringVar(
             value=FONT_KEY_TO_LABEL.get(self.display_settings["font"], "ゴシック（推奨）")
+        )
+        self.font_size_var = tk.StringVar(
+            value=FONT_SIZE_KEY_TO_LABEL.get(
+                self.display_settings["font_size"], "自動（長い文字を縮小・推奨）"
+            )
         )
         self.credit_format_var = tk.StringVar(
             value=CREDIT_KEY_TO_LABEL.get(self.display_settings["credit_style"], "日本語")
@@ -345,6 +384,11 @@ class SongCreditManagerApp(object):
             wraplength=590,
         ).pack(anchor="w", pady=(0, 8))
         ttk.Button(import_box, text="CSV／TSV／TXTを読み込む", command=self._import_setlist).pack(fill="x")
+        ttk.Button(
+            import_box,
+            text="チュートリアルのセットリストを読み込む",
+            command=self._restore_tutorial_setlist,
+        ).pack(fill="x", pady=(8, 0))
 
         export_box = ttk.LabelFrame(parent, text="書き出す", padding=12)
         export_box.pack(fill="x", pady=(14, 0))
@@ -389,18 +433,32 @@ class SongCreditManagerApp(object):
         )
         font_combo.grid(row=0, column=3, sticky="ew", padx=(8, 0), pady=3)
         font_combo.bind("<<ComboboxSelected>>", lambda event: self._apply_display_style())
-        ttk.Label(controls, text="クレジット表記").grid(row=1, column=0, sticky="w", pady=3)
+        ttk.Label(controls, text="文字サイズ").grid(row=1, column=0, sticky="w", pady=3)
+        font_size_combo = ttk.Combobox(
+            controls,
+            textvariable=self.font_size_var,
+            state="readonly",
+            values=tuple(FONT_SIZE_CHOICES.keys()),
+        )
+        font_size_combo.grid(row=1, column=1, sticky="ew", padx=(8, 16), pady=3)
+        font_size_combo.bind("<<ComboboxSelected>>", lambda event: self._apply_display_style())
+        ttk.Label(controls, text="クレジット表記").grid(row=1, column=2, sticky="w", pady=3)
         credit_combo = ttk.Combobox(
             controls,
             textvariable=self.credit_format_var,
             state="readonly",
             values=tuple(CREDIT_STYLE_CHOICES.keys()),
         )
-        credit_combo.grid(row=1, column=1, sticky="ew", padx=(8, 16), pady=3)
+        credit_combo.grid(row=1, column=3, sticky="ew", padx=(8, 0), pady=3)
         credit_combo.bind("<<ComboboxSelected>>", lambda event: self._apply_display_style())
         ttk.Button(controls, text="実ブラウザで確認", command=self._open_preview).grid(
-            row=1, column=2, columnspan=2, sticky="ew", padx=(0, 0), pady=3
+            row=2, column=0, columnspan=4, sticky="ew", pady=(7, 3)
         )
+        ttk.Label(
+            controls,
+            text="自動は1行に収まるよう縮小します。小・標準・大は選んだ大きさを保ち、長い文字を折り返します。",
+            wraplength=600,
+        ).grid(row=3, column=0, columnspan=4, sticky="w", pady=(5, 0))
 
         connection = ttk.LabelFrame(parent, text="OBS接続（最初の1回だけ）", padding=10)
         connection.pack(fill="x", pady=(10, 0))
@@ -433,6 +491,7 @@ class SongCreditManagerApp(object):
             "theme": preset["theme"],
             "panel": preset["panel"],
             "font": FONT_CHOICES.get(self.font_choice_var.get(), "gothic"),
+            "font_size": FONT_SIZE_CHOICES.get(self.font_size_var.get(), "auto"),
             "credit_style": CREDIT_STYLE_CHOICES.get(self.credit_format_var.get(), "jp"),
         }
 
@@ -440,7 +499,10 @@ class SongCreditManagerApp(object):
         settings = self._current_display_settings()
         self.display_settings = settings
         self.state_store.set_style(
-            theme=settings["theme"], panel=settings["panel"], font=settings["font"]
+            theme=settings["theme"],
+            panel=settings["panel"],
+            font=settings["font"],
+            font_size=settings["font_size"],
         )
         if self.overlay_visible and self.current_display_record:
             self.state_store.show_record(self.current_display_record, settings["credit_style"])
@@ -451,7 +513,11 @@ class SongCreditManagerApp(object):
             self._refresh_display_preview()
             return
         self._refresh_display_preview()
-        self._set_status("表示デザインを変更しました。OBSにも反映されます。")
+        self._set_status(
+            "表示デザインを変更しました（文字サイズ：{}）。OBSにも反映されます。".format(
+                self.font_size_var.get()
+            )
+        )
 
     def _preview_record(self):
         title = self.title_var.get().strip()
@@ -502,7 +568,7 @@ class SongCreditManagerApp(object):
         )
         left = max(28, int(width * 0.075))
         right = min(width - 28, int(width * 0.925))
-        top = max(52, int(height * 0.34))
+        top = max(52, int(height * 0.26))
         bottom = height - 22
         if settings["theme"] == "light":
             panel_color = "#eef4fb"
@@ -532,24 +598,40 @@ class SongCreditManagerApp(object):
         }.get(settings["font"], "Yu Gothic UI")
         text_left = left + 22
         text_width = max(100, right - text_left - 14)
-        canvas.create_text(
+        title_text = outputs["title"] or "曲名プレビュー"
+        title_size, artist_size, credits_size = PREVIEW_FONT_SIZES.get(
+            settings["font_size"], PREVIEW_FONT_SIZES["auto"]
+        )
+        if settings["font_size"] == "auto":
+            title_size = self._fit_preview_font_size(
+                title_text, font_family, title_size, 7, text_width, "bold"
+            )
+            artist_size = self._fit_preview_font_size(
+                outputs["artist"], font_family, artist_size, 7, text_width, "bold"
+            )
+            credits_size = self._fit_preview_font_size(
+                outputs["credits"], font_family, credits_size, 6, text_width, "normal"
+            )
+        title_item = canvas.create_text(
             text_left,
-            top + 18,
-            text=outputs["title"] or "曲名プレビュー",
+            top + 14,
+            text=title_text,
             anchor="nw",
             width=text_width,
             fill=title_color,
-            font=(font_family, 20, "bold"),
+            font=(font_family, title_size, "bold"),
         )
+        title_box = canvas.bbox(title_item) or (text_left, top + 14, text_left, top + 40)
+        artist_top = max(top + 48, title_box[3] + 4)
         if outputs["artist"]:
             canvas.create_text(
                 text_left,
-                top + 51,
+                artist_top,
                 text=outputs["artist"],
                 anchor="nw",
                 width=text_width,
                 fill=artist_color,
-                font=(font_family, 12, "bold"),
+                font=(font_family, artist_size, "bold"),
             )
         if outputs["credits"]:
             canvas.create_text(
@@ -559,8 +641,22 @@ class SongCreditManagerApp(object):
                 anchor="sw",
                 width=text_width,
                 fill=credits_color,
-                font=(font_family, 10),
+                font=(font_family, credits_size),
             )
+
+    def _fit_preview_font_size(self, text, family, preferred, minimum, max_width, weight):
+        if not text:
+            return preferred
+        for size in range(preferred, minimum - 1, -1):
+            try:
+                measured = tkfont.Font(
+                    root=self.root, family=family, size=size, weight=weight
+                ).measure(text)
+            except tk.TclError:
+                return preferred
+            if measured <= max_width:
+                return size
+        return minimum
 
     def _set_status(self, message):
         self.status_var.set(str(message))
@@ -580,7 +676,14 @@ class SongCreditManagerApp(object):
             return
         self.overlay_url_var.set(url)
         self.server_status_var.set("表示サーバー：起動中")
-        self._set_status("準備できました。OBSへ表示URLを登録してください。")
+        if self.tutorial_loaded:
+            self._set_status(
+                "チュートリアルの{}曲を読み込みました。曲を選び［選択曲を表示］で試せます。".format(
+                    len(self.document.items)
+                )
+            )
+        else:
+            self._set_status("準備できました。OBSへ表示URLを登録してください。")
 
     def _selected_index(self):
         selection = self.setlist_box.curselection()
@@ -618,7 +721,10 @@ class SongCreditManagerApp(object):
         self.setlist_name_var.set(self.document.name)
         dirty = "（未保存の変更あり）" if self.document.dirty else ""
         self.setlist_summary_var.set("{}曲 {}".format(len(self.document.items), dirty).strip())
-        self.setlist_path_var.set(self.document.path or "未保存")
+        if self.tutorial_loaded and not self.document.path:
+            self.setlist_path_var.set("チュートリアル見本（保存すると自分用ファイルになります）")
+        else:
+            self.setlist_path_var.set(self.document.path or "未保存")
         if self.document.items:
             previous = max(0, min(previous if previous >= 0 else 0, len(self.document.items) - 1))
             self._select_index(previous)
@@ -962,6 +1068,7 @@ class SongCreditManagerApp(object):
         if name is None:
             return
         self.document = manager_core.SetlistDocument(name=name)
+        self.tutorial_loaded = False
         self.play_index = -1
         self._refresh_setlist()
         self._set_status("新しいセットリストを作成しました。")
@@ -982,6 +1089,7 @@ class SongCreditManagerApp(object):
         except core.SongCreditError as exc:
             messagebox.showerror("読み込みエラー", str(exc))
             return
+        self.tutorial_loaded = False
         self.play_index = -1
         self._refresh_setlist(0)
         self._set_status("セットリストを開きました。")
@@ -1025,6 +1133,7 @@ class SongCreditManagerApp(object):
         except core.SongCreditError as exc:
             messagebox.showerror("保存エラー", str(exc))
             return False
+        self.tutorial_loaded = False
         self._refresh_setlist(self._selected_index())
         self._set_status("セットリストを保存しました。")
         return True
@@ -1044,9 +1153,27 @@ class SongCreditManagerApp(object):
         except core.SongCreditError as exc:
             messagebox.showerror("読み込みエラー", str(exc))
             return
+        self.tutorial_loaded = False
         self.play_index = -1
         self._refresh_setlist(0)
         self._set_status("{}曲を読み込みました。専用形式で保存してください。".format(len(self.document.items)))
+
+    def _restore_tutorial_setlist(self):
+        if not self._confirm_discard():
+            return
+        try:
+            self.document = load_bundled_tutorial_document()
+        except core.SongCreditError as exc:
+            messagebox.showerror("チュートリアル読み込みエラー", str(exc))
+            return
+        self.tutorial_loaded = True
+        self.play_index = -1
+        self._refresh_setlist(0)
+        self._set_status(
+            "チュートリアルの{}曲を読み込みました。保存すると自分用ファイルになります。".format(
+                len(self.document.items)
+            )
+        )
 
     def _export_csv(self):
         initial_name = os.path.splitext(os.path.basename(self.document.path))[0] if self.document.path else self.document.name

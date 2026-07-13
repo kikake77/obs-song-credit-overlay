@@ -23,6 +23,11 @@ class OverlayServerTests(unittest.TestCase):
         self.assertIn('data-font', overlay_html)
         self.assertIn('state.theme', overlay_html)
         self.assertIn('state.panel', overlay_html)
+        self.assertIn('state.font_size', overlay_html)
+        self.assertIn('sizeText', overlay_html)
+        self.assertIn('autoFit', overlay_html)
+        self.assertIn('state.overlay_version', overlay_html)
+        self.assertIn('allow-wrap', overlay_html)
 
     def test_server_serves_overlay_health_and_state(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -30,7 +35,7 @@ class OverlayServerTests(unittest.TestCase):
             with open(overlay_path, "w", encoding="utf-8") as handle:
                 handle.write("<!doctype html><title>Test Overlay</title>")
             store = manager_core.OverlayStateStore(
-                {"theme": "light", "panel": False, "font": "mincho"}
+                {"theme": "light", "panel": False, "font": "mincho", "font_size": "large"}
             )
             server = OverlayServer(store, port=0, overlay_path=overlay_path)
             try:
@@ -49,10 +54,12 @@ class OverlayServerTests(unittest.TestCase):
                 ) as response:
                     state = json.loads(response.read())
                 self.assertTrue(state["visible"])
+                self.assertEqual(manager_core.OVERLAY_PROTOCOL_VERSION, state["overlay_version"])
                 self.assertEqual("テスト曲", state["title"])
                 self.assertEqual("light", state["theme"])
                 self.assertFalse(state["panel"])
                 self.assertEqual("mincho", state["font"])
+                self.assertEqual("large", state["font_size"])
             finally:
                 server.stop()
 
