@@ -313,8 +313,13 @@ python -m unittest discover -s tests -v
 song-credit-overlay/
 ├─ song_credit_overlay.py
 ├─ song_credit_core.py
+├─ LICENSE
 ├─ README.md
 └─ tests/
    ├─ test_core.py
    └─ test_obs_script_smoke.py
 ```
+
+## ライセンス
+
+このソフトウェアは[MIT License](LICENSE)で公開しています。著作権表示と許諾表示を残すことで、利用・改変・再配布できます。
